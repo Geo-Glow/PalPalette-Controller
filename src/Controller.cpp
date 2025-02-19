@@ -512,8 +512,12 @@ void setup()
 
     // loadConfigFromFile();
     connectToWifi(true);
-    ensureNanoleafURL();
+
     setupMQTTClient();
+    mqttClient.publishStatusUpdate("mqttStatus", mqttClient.isConnected() ? "Connected" : "Disconnected");
+    mqttClient.publishStatusUpdate("wifiStatus", WiFi.status() == WL_CONNECTED ? "Connected" : "Disconnected");
+
+    ensureNanoleafURL();
     attemptNanoleafConnection();
     nanoleaf.setColorCallback(colorCallback);
     publishStatus();

@@ -26,6 +26,11 @@ public:
 
     void addTopicAdapter(std::unique_ptr<TopicAdapter> adapter);
 
+    void publishStatusUpdate(const char *statusType, const char *message);
+    void publishErrorMessage(const char *errorMessage);
+
+    bool isConnected();
+
 private:
     void reconnect();
 

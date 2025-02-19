@@ -1,4 +1,7 @@
+#include <ArduinoJson.h>
 #include "MQTTClient.h"
+
+const char *FIRMWARE_VERSION = "1.14";
 
 MQTTClient::MQTTClient(WiFiClient &wifiClient)
     : client(wifiClient)
@@ -13,6 +16,7 @@ void MQTTClient::setup(const char *mqttBroker, const int mqttPort, const char *f
     client.setBufferSize(MQTT_BUFFER_SIZE);
     client.setCallback([this](char *topic, byte *payload, unsigned int length)
                        { this->callback(topic, payload, length); });
+    loop();
 }
 
 void MQTTClient::staticCallback(char *topic, byte *payload, unsigned int length)
@@ -28,6 +32,26 @@ void MQTTClient::loop()
     client.loop();
 }
 
+void MQTTClient::publishStatusUpdate(const char *statusType, const char *message)
+{
+    JsonDocument jsonDoc;
+    jsonDoc["firmwareVersion"] = FIRMWARE_VERSION;
+    jsonDoc["friendId"] = this->friendId;
+    jsonDoc[statusType] = message;
+
+    publish("GeoGlow/status/update", jsonDoc);
+}
+
+void MQTTClient::publishErrorMessage(const char *errorMessage)
+{
+    JsonDocument jsonDoc;
+    jsonDoc["firmwareVersion"] = FIRMWARE_VERSION;
+    jsonDoc["friendId"] = friendId;
+    jsonDoc["error"] = errorMessage;
+
+    publish("GeoGlow/status/error", jsonDoc);
+}
+
 void MQTTClient::reconnect()
 {
     while (!client.connected())
@@ -39,15 +63,22 @@ void MQTTClient::reconnect()
             Serial.println("connected: " + mqttClientId);
             for (const auto &adapter : topicAdapters)
             {
-                client.subscribe(buildTopic(adapter.get()).c_str());
+                if (client.subscribe(buildTopic(adapter.get()).c_str()))
+                {
+                    Serial.println("Subscribed to topic: " + buildTopic(adapter.get()));
+                }
+                else
+                {
+                    Serial.println("Failed to subscribe to topic: " + buildTopic(adapter.get()));
+                }
             }
         }
         else
         {
-            Serial.print("failed, rc=");
+            Serial.print("Failed to connect, return code: ");
             Serial.print(client.state());
-            Serial.println(" try again in 5 seconds");
-            delay(2000);
+            Serial.println("Retrying again in 5 seconds");
+            delay(5000);
         }
     }
 }
@@ -63,6 +94,7 @@ void MQTTClient::publish(const char *topic, const JsonDocument &jsonPayload)
     else
     {
         Serial.println("MQTT client not connected. Unable to publish message.");
+        publishErrorMessage("MQTT client not connected during publish.");
     }
 }
 
@@ -111,8 +143,11 @@ void MQTTClient::callback(char *topic, byte *payload, unsigned int length)
     DeserializationError error = deserializeJson(jsonDocument, payloadBuffer);
     if (error)
     {
-        Serial.print("Failed to parse JSON payload: ");
+        Serial.print("JSON Deserialization failed: ");
         Serial.println(error.c_str());
+        Serial.print("Payload: ");
+        Serial.println(payloadBuffer);
+        publishErrorMessage("JSON Deserialization failed.");
         return;
     }
 
@@ -130,4 +165,10 @@ void MQTTClient::callback(char *topic, byte *payload, unsigned int length)
     Serial.print(topic);
     Serial.print("] ");
     Serial.println(payloadBuffer);
+    publishErrorMessage("Unhandled MQTT message.");
+}
+
+bool MQTTClient::isConnected()
+{
+    return client.connected();
 }
