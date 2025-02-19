@@ -284,7 +284,8 @@ void attemptNanoleafConnection()
 void setupMQTTClient()
 {
     mqttClient.setup(DEFAULT_MQTT_BROKER, DEFAULT_MQTT_PORT, friendId);
-    mqttClient.addTopicAdapter(&colorPaletteAdapter);
+    auto colorAdapter = std::make_unique<ColorPaletteAdapter>(nanoleaf);
+    mqttClient.addTopicAdapter(std::move(colorAdapter));
 }
 
 void publishHeartbeat()

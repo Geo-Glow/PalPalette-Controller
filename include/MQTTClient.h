@@ -9,6 +9,7 @@
 
 #include <PubSubClient.h>
 #include <vector>
+#include <memory>
 #include <ArduinoJson.h>
 #include "TopicAdapter.h"
 
@@ -23,10 +24,13 @@ public:
 
     void publish(const char *topic, const JsonDocument &jsonPayload);
 
-    void addTopicAdapter(TopicAdapter *adapter);
+    void addTopicAdapter(std::unique_ptr<TopicAdapter> adapter);
 
 private:
     void reconnect();
+
+    static constexpr size_t MQTT_BUFFER_SIZE = 2048;
+    static constexpr size_t JSON_BUFFER_SIZE = 512;
 
     String buildTopic(const TopicAdapter *adapter) const;
 
@@ -34,12 +38,11 @@ private:
 
     void callback(char *topic, byte *payload, unsigned int length);
 
-    static bool matches(const String &subscribedTopic, const String &receivedTopic);
+    bool matches(const String &subscribedTopic, const String &receivedTopic) const;
 
     PubSubClient client;
     String friendId;
-    static std::vector<TopicAdapter *> topicAdapters;
-    static MQTTClient *instance;
+    std::vector<std::unique_ptr<TopicAdapter>> topicAdapters;
 };
 
 #endif // MQTTCLIENT_H

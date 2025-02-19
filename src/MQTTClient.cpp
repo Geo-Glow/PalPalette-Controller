@@ -1,8 +1,5 @@
 #include "MQTTClient.h"
 
-std::vector<TopicAdapter *> MQTTClient::topicAdapters;
-MQTTClient *MQTTClient::instance = nullptr;
-
 MQTTClient::MQTTClient(WiFiClient &wifiClient)
     : client(wifiClient)
 {
@@ -11,16 +8,15 @@ MQTTClient::MQTTClient(WiFiClient &wifiClient)
 void MQTTClient::setup(const char *mqttBroker, const int mqttPort, const char *friendId)
 {
     client.setServer(mqttBroker, mqttPort);
-
-    // Assign this instance to the static instance pointer
-    instance = this;
-
-    // Set the static callback
-    client.setCallback(staticCallback);
-
-    client.setBufferSize(2048);
-
     this->friendId = friendId;
+    client.setCallback(staticCallback);
+    client.setBufferSize(MQTT_BUFFER_SIZE);
+    client.setCallback([this](char *topic, byte *payload, unsigned int length)
+                       { this->callback(topic, payload, length); });
+}
+
+void MQTTClient::staticCallback(char *topic, byte *payload, unsigned int length)
+{
 }
 
 void MQTTClient::loop()
@@ -41,9 +37,9 @@ void MQTTClient::reconnect()
         if (client.connect(mqttClientId.c_str()))
         {
             Serial.println("connected: " + mqttClientId);
-            for (const auto adapter : topicAdapters)
+            for (const auto &adapter : topicAdapters)
             {
-                client.subscribe(buildTopic(adapter).c_str());
+                client.subscribe(buildTopic(adapter.get()).c_str());
             }
         }
         else
@@ -60,7 +56,7 @@ void MQTTClient::publish(const char *topic, const JsonDocument &jsonPayload)
 {
     if (client.connected())
     {
-        char buffer[512];
+        char buffer[JSON_BUFFER_SIZE];
         size_t n = serializeJson(jsonPayload, buffer);
         client.publish(topic, buffer, n);
     }
@@ -70,30 +66,38 @@ void MQTTClient::publish(const char *topic, const JsonDocument &jsonPayload)
     }
 }
 
-String MQTTClient::buildTopic(const TopicAdapter *adapter) const
+void MQTTClient::addTopicAdapter(std::unique_ptr<TopicAdapter> adapter)
 {
-    String topic = "GeoGlow/";
-    topic += friendId + "/";
-    topic += adapter->getTopic();
-    return topic;
-}
-
-void MQTTClient::addTopicAdapter(TopicAdapter *adapter)
-{
-    topicAdapters.push_back(adapter);
     if (client.connected())
     {
-        client.subscribe(buildTopic(adapter).c_str());
+        client.subscribe(buildTopic(adapter.get()).c_str());
     }
+    topicAdapters.push_back(std::move(adapter));
 }
 
-void MQTTClient::staticCallback(char *topic, byte *payload, unsigned int length)
+String MQTTClient::buildTopic(const TopicAdapter *adapter) const
 {
-    // Use the static instance pointer to call the instance method
-    if (instance)
+    return "GeoGlow/" + friendId + "/" + adapter->getTopic();
+}
+
+bool MQTTClient::matches(const String &subscribedTopic, const String &receivedTopic) const
+{
+    if (subscribedTopic.endsWith("#"))
     {
-        instance->callback(topic, payload, length);
+        String baseTopic = subscribedTopic.substring(0, subscribedTopic.length() - 1);
+        return receivedTopic.startsWith(baseTopic);
     }
+    else if (subscribedTopic.indexOf('+') >= 0)
+    {
+        int plusPos = subscribedTopic.indexOf('+');
+        String preWildcard = subscribedTopic.substring(0, plusPos);
+        String postWildcard = subscribedTopic.substring(plusPos + 1);
+        if (receivedTopic.startsWith(preWildcard) && receivedTopic.endsWith(postWildcard))
+        {
+            return true;
+        }
+    }
+    return subscribedTopic == receivedTopic;
 }
 
 void MQTTClient::callback(char *topic, byte *payload, unsigned int length)
@@ -113,9 +117,9 @@ void MQTTClient::callback(char *topic, byte *payload, unsigned int length)
     }
 
     String receivedTopic = String(topic);
-    for (const auto adapter : topicAdapters)
+    for (const auto &adapter : topicAdapters)
     {
-        if (matches(buildTopic(adapter), receivedTopic))
+        if (matches(buildTopic(adapter.get()), receivedTopic))
         {
             adapter->callback(topic, jsonDocument.as<JsonObject>(), length);
             return;
@@ -126,24 +130,4 @@ void MQTTClient::callback(char *topic, byte *payload, unsigned int length)
     Serial.print(topic);
     Serial.print("] ");
     Serial.println(payloadBuffer);
-}
-
-bool MQTTClient::matches(const String &subscribedTopic, const String &receivedTopic)
-{
-    if (subscribedTopic.endsWith("#"))
-    {
-        String baseTopic = subscribedTopic.substring(0, subscribedTopic.length() - 1);
-        return receivedTopic.startsWith(baseTopic);
-    }
-    else if (subscribedTopic.indexOf('+') >= 0)
-    {
-        int plusPos = subscribedTopic.indexOf('+');
-        String preWildcard = subscribedTopic.substring(0, plusPos);
-        String postWildcard = subscribedTopic.substring(plusPos + 1);
-        if (receivedTopic.startsWith(preWildcard) && receivedTopic.endsWith(postWildcard))
-        {
-            return true;
-        }
-    }
-    return subscribedTopic == receivedTopic;
 }
