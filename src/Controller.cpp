@@ -193,10 +193,12 @@ bool generateMDNSNanoleafURL()
 
         // If we exit the loop without finding a service
         Serial.println("Es konnte kein Nanoleaf Service nach der maximalen Anzahl an Versuchen gefunden werden.");
+        mqttClient.publishErrorMessage("[MDNS]: No Nanoleaf MDNS Service was found.");
     }
     else
     {
         Serial.println("Fehler beim Starten von MNDS.");
+        mqttClient.publishErrorMessage("[MDNS]: Error starting the MDNS service.");
     }
     return false;
 }
@@ -284,7 +286,8 @@ void attemptNanoleafConnection()
 void setupMQTTClient()
 {
     mqttClient.setup(DEFAULT_MQTT_BROKER, DEFAULT_MQTT_PORT, friendId);
-    mqttClient.addTopicAdapter(&colorPaletteAdapter);
+    auto colorAdapter = std::make_unique<ColorPaletteAdapter>(nanoleaf);
+    mqttClient.addTopicAdapter(std::move(colorAdapter));
 }
 
 void publishHeartbeat()
@@ -292,11 +295,13 @@ void publishHeartbeat()
     if (!nanoleaf.isConnected())
     {
         Serial.println("Lost connection to nanoleafs. Trying to reconnect.");
+        mqttClient.publishStatusUpdate("nanoleafStatus", "Disconnected");
         attemptNanoleafConnection();
 
         if (nanoleaf.isConnected())
         {
             Serial.println("Reconnecting worked! Continuing as before.");
+            mqttClient.publishStatusUpdate("nanoleafStatus", "Connected");
         }
         else
         {
@@ -310,6 +315,7 @@ void publishHeartbeat()
 
     int httpResponseCode = httpClient.POST("{}");
     String responseMsg = httpClient.errorToString(httpResponseCode).c_str();
+    String errorMsg;
     switch (httpResponseCode)
     {
     case 204:
@@ -319,7 +325,10 @@ void publishHeartbeat()
         publishStatus();
         break;
     case 500:
-        Serial.printf("Failed posting heartbeat: %s\n", responseMsg.c_str());
+        errorMsg = "[HTTP]: Failed posting heartbeat: ";
+        errorMsg += httpClient.errorToString(httpResponseCode);
+        Serial.println(errorMsg);
+        mqttClient.publishErrorMessage("[HTTP]: Failed posting heartbeat");
         break;
     default:
         Serial.printf("Unknown error occured: %s\n", responseMsg.c_str());
@@ -356,7 +365,10 @@ void publishStatus()
     }
     else
     {
-        Serial.printf("Error occured while making PATCH request: %s\n", httpClient.errorToString(httpResponseCode).c_str());
+        String errorMsg = "[HTTP]: Error while making patch request: ";
+        errorMsg += httpClient.errorToString(httpResponseCode);
+        Serial.println(errorMsg);
+        mqttClient.publishErrorMessage(errorMsg.c_str());
     }
 
     httpClient.end();
@@ -376,6 +388,7 @@ bool ensureNanoleafURL()
         else
         {
             Serial.println("Nanoleaf URL konnte nicht gefunden werden.");
+            mqttClient.publishErrorMessage("[URL_Lookup]: Nanoleaf URL could not be found.");
             return false;
         }
     }
@@ -408,6 +421,7 @@ void registerNanoleafEvents()
     if (!success)
     {
         Serial.println("Event registration failed after maximum retries. Setting publishLayoutMode to ONHEARTBEAT.");
+        mqttClient.publishErrorMessage("[HTTP]: Nanoleaf Event registration failed.");
         publishLayoutMode = ONHEARTBEAT;
         return;
     }
@@ -441,6 +455,7 @@ void initialSetup()
 
     Serial.println("Captive Portal wird aufgesetzt.");
     setupWiFiManager();
+    setupMQTTClient();
 
     Serial.println("Nanoleaf MDNS Lookup");
     unsigned long now = millis();
@@ -463,9 +478,6 @@ void initialSetup()
             then = millis();
         }
     }
-
-    /*Serial.println("MQTT Verbindung wird aufgebaut...");
-    setupMQTTClient();*/
 
     Serial.println("Generating Auth token");
     while (!nanoleaf.isConnected())
@@ -511,10 +523,17 @@ void setup()
 
     // loadConfigFromFile();
     connectToWifi(true);
-    ensureNanoleafURL();
+
     setupMQTTClient();
+    // Publish Wifi and MQTT Status after MQTT Client is connected
+    mqttClient.publishStatusUpdate("mqttStatus", mqttClient.isConnected() ? "Connected" : "Disconnected");
+    mqttClient.publishStatusUpdate("wifiStatus", WiFi.status() == WL_CONNECTED ? "Connected" : "Disconnected");
+
+    ensureNanoleafURL();
     attemptNanoleafConnection();
     nanoleaf.setColorCallback(colorCallback);
+    mqttClient.publishStatusUpdate("nanoleafStatus", nanoleaf.isConnected() ? "Connected" : "Disconnected"); // Publish Nanoleaf Status
+
     publishStatus();
     publishInitialHeartbeat();
 }
@@ -549,6 +568,7 @@ void loop()
             publishHeartbeat();
         }
 
+        mqttClient.publishStatusUpdate("uptime", String(millis()).c_str()); // Publish Nanoleaf Status
         lastPublishTime = now;
     }
 }
