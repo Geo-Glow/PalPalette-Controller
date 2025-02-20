@@ -1,7 +1,7 @@
 #include <ArduinoJson.h>
 #include "MQTTClient.h"
 
-const char *FIRMWARE_VERSION = "1.14";
+const char *FIRMWARE_VERSION = "1.15";
 
 MQTTClient::MQTTClient(WiFiClient &wifiClient)
     : client(wifiClient)
