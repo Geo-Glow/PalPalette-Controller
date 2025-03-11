@@ -1,5 +1,57 @@
 #include "FileSystemHandler.h"
 
+bool FileSystemHandler::begin()
+{
+    if (!FILESYSTEM.begin())
+    {
+        Serial.println("Failed to mount file system");
+        FILESYSTEM.format();
+        if (!FILESYSTEM.begin())
+        {
+            Serial.println("LittleFS reformatted, but still unable to mount.");
+            return false;
+        }
+        else
+        {
+            Serial.println("LittleFS reformatted and mounted successfully.");
+        }
+    }
+
+    if (!FILESYSTEM.exists(INIT_FILE))
+    {
+        Serial.println("Performing intial setup");
+        performInitialSetup();
+    }
+    else
+    {
+        Serial.println("File system is already set up");
+    }
+    return true;
+}
+
+void FileSystemHandler::performInitialSetup()
+{
+    formatFileSystem();
+
+    File file = FILESYSTEM.open(INIT_FILE, "w");
+    if (file)
+    {
+        file.println("Initialized");
+        file.close();
+    }
+    else
+    {
+        Serial.println("Init failed");
+    }
+}
+
+void FileSystemHandler::formatFileSystem()
+{
+    Serial.println("Formatting file system...");
+    FILESYSTEM.format();
+    Serial.println("File system formatted");
+}
+
 bool FileSystemHandler::removeConfigFile(const char *path)
 {
     if (!FILESYSTEM.begin())

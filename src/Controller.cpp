@@ -31,7 +31,11 @@ unsigned long lastColorTime = 0;
 bool currentlyShowingCustomColor = false;
 
 // Reset Logic
-#define RESET_BTN_PIN 0      // Flash Button Pin
+#if defined(ESP8266)
+#define RESET_BTN_PIN 0
+#else
+#define RESET_BTN_PIN 9
+#endif
 #define LONG_PRESS_TIME 3000 // Milliseconds (3 sec)
 volatile unsigned long buttonPressStartTime = 0;
 
@@ -48,6 +52,7 @@ void performReset()
 {
     wifiManager.erase();
     FileSystemHandler::removeConfigFile(CONFIG_FILE);
+    FileSystemHandler::removeConfigFile("/init_done");
     ESP.restart();
 }
 
@@ -62,6 +67,7 @@ void IRAM_ATTR handleResetInterrupt()
     {
         if (millis() - buttonPressStartTime >= LONG_PRESS_TIME)
         {
+            Serial.println("Reset executed");
             performReset();
         }
     }
@@ -451,6 +457,7 @@ void blink_led(int blinkDelay)
 
 void initialSetup()
 {
+    FileSystemHandler::begin();
     bool success = false;
 
     Serial.println("Captive Portal wird aufgesetzt.");

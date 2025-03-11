@@ -152,6 +152,7 @@ void MQTTClient::callback(char *topic, byte *payload, unsigned int length)
     }
 
     String receivedTopic = String(topic);
+    Serial.println(receivedTopic);
     for (const auto &adapter : topicAdapters)
     {
         if (matches(buildTopic(adapter.get()), receivedTopic))
