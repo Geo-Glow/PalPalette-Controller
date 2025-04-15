@@ -1,6 +1,9 @@
 <!DOCTYPE html>
 <html>
   <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>PalPalette Firmware Installer</title>
     <link rel="stylesheet" type="text/css" href="styles.css" />
   </head>
   <body>
@@ -40,6 +43,20 @@
         document.getElementById("notSupported").style.display = "block";
         document.getElementById("main").style.display = "none";
       }
+    </script>
+
+    <script>
+      const installButton = document.getElementById("installButton");
+      installButton.addEventListener("install-complete", () => {
+        alert(
+          "✅ Install complete! You can now unplug and restart your device."
+        );
+      });
+      installButton.addEventListener("install-error", (event) => {
+        alert(
+          "❌ Install failed: " + (event.detail.message || "Unknown error")
+        );
+      });
     </script>
   </body>
 </html>

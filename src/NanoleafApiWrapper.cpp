@@ -93,7 +93,7 @@ bool NanoleafApiWrapper::isConnected()
     JsonDocument jsonResponse;
     if (sendRequest("GET", "/", nullptr, &jsonResponse, true))
     {
-        if (jsonResponse["serialNo"] != nullptr)
+        if (jsonResponse["serialNo"].is<const char *>())
         {
             return true;
         }
@@ -185,29 +185,41 @@ bool NanoleafApiWrapper::identify()
 std::vector<String> NanoleafApiWrapper::getPanelIds()
 {
     JsonDocument jsonResponse;
-
     std::vector<String> panelIds;
     this->triangleIds.clear();
 
-    if (sendRequest("GET", "/panelLayout/layout", nullptr, &jsonResponse, true) &&
-        jsonResponse["positionData"] != nullptr)
+    if (!sendRequest("GET", "/panelLayout/layout", nullptr, &jsonResponse, true))
     {
-        const size_t arraySize = jsonResponse["positionData"].size();
+        return panelIds; // Return empty if request failed
+    }
 
-        for (size_t i = 0; i < arraySize; i++)
+    // Check if positionData exists and is an array
+    if (!jsonResponse["positionData"].is<JsonArray>())
+    {
+        Serial.println("positionData is not an array or does not exist.");
+        return panelIds;
+    }
+
+    JsonArray positionData = jsonResponse["positionData"].as<JsonArray>();
+    for (JsonObject panel : positionData)
+    {
+        if (!panel["panelId"].is<int>() || !panel["shapeType"].is<int>())
         {
-            String panelId = jsonResponse["positionData"][i]["panelId"].as<String>();
-            String shapeType = jsonResponse["positionData"][i]["shapeType"].as<String>();
-            if (panelId != "0")
+            continue; // Skip invalid entries
+        }
+
+        String panelId = panel["panelId"].as<String>();
+        String shapeType = panel["shapeType"].as<String>();
+
+        if (panelId != "0")
+        {
+            if (shapeType == "9")
             {
-                if (shapeType == "9")
-                {
-                    triangleIds.push_back(panelId);
-                }
-                else
-                {
-                    panelIds.push_back(panelId);
-                }
+                triangleIds.push_back(panelId);
+            }
+            else
+            {
+                panelIds.push_back(panelId);
             }
         }
     }

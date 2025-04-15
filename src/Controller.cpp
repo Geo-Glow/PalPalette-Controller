@@ -31,7 +31,11 @@ unsigned long lastColorTime = 0;
 bool currentlyShowingCustomColor = false;
 
 // Reset Logic
-#define RESET_BTN_PIN 0      // Flash Button Pin
+#if defined(ESP8266)
+#define RESET_BTN_PIN 0
+#else
+#define RESET_BTN_PIN 9
+#endif
 #define LONG_PRESS_TIME 3000 // Milliseconds (3 sec)
 volatile unsigned long buttonPressStartTime = 0;
 
@@ -48,6 +52,7 @@ void performReset()
 {
     wifiManager.erase();
     FileSystemHandler::removeConfigFile(CONFIG_FILE);
+    FileSystemHandler::removeConfigFile("/init_done");
     ESP.restart();
 }
 
@@ -62,6 +67,7 @@ void IRAM_ATTR handleResetInterrupt()
     {
         if (millis() - buttonPressStartTime >= LONG_PRESS_TIME)
         {
+            Serial.println("Reset executed");
             performReset();
         }
     }
@@ -206,8 +212,9 @@ bool generateMDNSNanoleafURL()
 void loadConfigFromFile()
 {
     JsonDocument jsonConfig;
-    if (!FileSystemHandler::loadConfigFromFile(CONFIG_FILE, jsonConfig, CONFIG_JSON_SIZE))
+    if (FileSystemHandler::loadConfigFromFile(CONFIG_FILE, jsonConfig, CONFIG_JSON_SIZE) != FileSystemResult::Success)
     {
+        Serial.println("Error loading config file. Using default values.");
         return;
     }
 
@@ -236,9 +243,14 @@ void saveConfigToFile()
     jsonConfig["setupDone"] = initialSetupDone;
     shouldSaveConfig = false;
 
-    if (!FileSystemHandler::saveConfigToFile(CONFIG_FILE, jsonConfig))
+    if (FileSystemHandler::saveConfigToFile(CONFIG_FILE, jsonConfig) != FileSystemResult::Success)
     {
-        Serial.println("Error");
+        Serial.println("Error saving config file.");
+        mqttClient.publishErrorMessage("[FileSystem]: Error saving config file.");
+    }
+    else
+    {
+        Serial.println("Config file saved successfully.");
     }
 }
 

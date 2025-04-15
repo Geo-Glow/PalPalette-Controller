@@ -1,6 +1,5 @@
 #ifndef CONTROLLER_H
 #define CONTROLLER_H
-
 #include <Arduino.h>
 
 #if defined(ESP8266)

@@ -1,105 +1,200 @@
 #include "FileSystemHandler.h"
 
-bool FileSystemHandler::removeConfigFile(const char *path)
+bool FileSystemHandler::loggingEnabled = true;
+bool FileSystemHandler::isInitialized = false;
+
+void FileSystemHandler::formatFileSystem()
 {
-    if (!FILESYSTEM.begin())
+    logInfo("Formatting filesystem...");
+    if (FILESYSTEM.format())
     {
-        Serial.println("Failed to mount FS for delete");
-        return false;
-    }
-    if (FILESYSTEM.exists(path))
-    {
-        if (!FILESYSTEM.remove(path))
-        {
-            Serial.println("Failed to delete config file");
-            FILESYSTEM.end();
-            return false;
-        }
-        Serial.println("Config file deleted");
+        logInfo("Filesystem formatted successfully");
     }
     else
     {
-        Serial.println("Config file does not exist");
+        logError("Formatting failed");
+    }
+}
+
+bool FileSystemHandler::initialize()
+{
+    if (isInitialized)
+        return true;
+
+    if (!FILESYSTEM.begin())
+    {
+        logError("Failed to mount file system, attempting to format...");
+        formatFileSystem();
+
+        if (!FILESYSTEM.begin())
+        {
+            logError("Failed to mount file system after formatting");
+            return false;
+        }
     }
 
-    FILESYSTEM.end();
+    isInitialized = true;
+    logInfo("File system initialized successfully");
     return true;
 }
 
-bool FileSystemHandler::loadConfigFromFile(const char *path, JsonDocument &jsonDoc, size_t jsonSize)
+FileSystemHandler::FilesystemGuard::FilesystemGuard() : mounted(false)
 {
-    if (!FILESYSTEM.begin())
+    if (!isInitialized && !initialize())
     {
-        Serial.println("Failed to mount FS");
-        return false;
+        logError("Filesystem not initialized");
+        return;
     }
+    mounted = true;
+}
+
+FileSystemHandler::FilesystemGuard::~FilesystemGuard() {}
+
+FileSystemResult FileSystemHandler::loadConfigFromFile(const char *path, JsonDocument &jsonDoc, size_t maxAllowedSize)
+{
+    FilesystemGuard guard;
+    if (!guard.isMounted())
+        return FileSystemResult::MountFailed;
 
     if (!FILESYSTEM.exists(path))
     {
-        Serial.println("Config file does not exist");
-        FILESYSTEM.end();
-        return false;
+        logDebug(String("Config file not found: ") + path);
+        return FileSystemResult::FileNotFound;
     }
 
     File configFile = FILESYSTEM.open(path, "r");
     if (!configFile)
     {
-        Serial.println("Failed to open config file");
-        FILESYSTEM.end();
-        return false;
+        logError(String("Failed to open config file: ") + path);
+        return FileSystemResult::FileOpenError;
     }
 
     size_t size = configFile.size();
-    if (size > jsonSize)
+    if (size > maxAllowedSize)
     {
-        Serial.println("Config file is too large");
+        logError(String("Config file too large: ") + size + " (max: " + maxAllowedSize + ")");
         configFile.close();
-        FILESYSTEM.end();
-        return false;
+        return FileSystemResult::FileTooLarge;
     }
 
-    std::unique_ptr<char[]> buf(new char[size]);
-    configFile.readBytes(buf.get(), size);
+    std::vector<char> buf(size);
+    configFile.readBytes(buf.data(), size);
     configFile.close();
-    FILESYSTEM.end();
 
-    DeserializationError error = deserializeJson(jsonDoc, buf.get());
+    DeserializationError error = deserializeJson(jsonDoc, buf.data());
     if (error)
     {
-        Serial.println("Failed to parse JSON config file");
-        return false;
+        logError(String("JSON parse error: ") + error.c_str());
+        return FileSystemResult::ParseError;
     }
 
-    Serial.println("Parsed JSON config");
-    return true;
+    logDebug(String("Successfully loaded config file: ") + path);
+    return FileSystemResult::Success;
 }
 
-bool FileSystemHandler::saveConfigToFile(const char *path, const JsonDocument &jsonDoc)
+FileSystemResult FileSystemHandler::saveConfigToFile(const char *path, const JsonDocument &jsonDoc)
 {
-    if (!FILESYSTEM.begin())
-    {
-        Serial.println("Failed to mount FS for save");
-        return false;
-    }
+    FilesystemGuard guard;
+    if (!guard.isMounted())
+        return FileSystemResult::MountFailed;
 
-    File configFile = FILESYSTEM.open(path, "w");
+    String tempPath = String(path) + ".tmp";
+
+    File configFile = FILESYSTEM.open(tempPath.c_str(), "w");
     if (!configFile)
     {
-        Serial.println("Failed to open config file for writing");
-        FILESYSTEM.end();
-        return false;
+        logError(String("Failed to open config file for writing: ") + tempPath);
+        return FileSystemResult::FileOpenError;
     }
 
-    if (serializeJson(jsonDoc, configFile) == 0)
-    {
-        Serial.println("Failed to write JSON to config file");
-        configFile.close();
-        FILESYSTEM.end();
-        return false;
-    }
-
-    Serial.println("Config saved successfully");
+    size_t bytesWritten = serializeJson(jsonDoc, configFile);
     configFile.close();
-    FILESYSTEM.end();
-    return true;
+
+    if (bytesWritten == 0)
+    {
+        logError("Failed to write JSON to config file");
+        FILESYSTEM.remove(tempPath.c_str());
+        return FileSystemResult::WriteError;
+    }
+
+    if (FILESYSTEM.exists(path))
+    {
+        FILESYSTEM.remove(path);
+    }
+
+    if (!FILESYSTEM.rename(tempPath.c_str(), path))
+    {
+        logError("Failed to replace config file with new version");
+        FILESYSTEM.remove(tempPath.c_str());
+        return FileSystemResult::WriteError;
+    }
+
+    logDebug(String("Successfully saved config: ") + path);
+    return FileSystemResult::Success;
+}
+
+FileSystemResult FileSystemHandler::removeConfigFile(const char *path)
+{
+    FilesystemGuard guard;
+    if (!guard.isMounted())
+        return FileSystemResult::MountFailed;
+
+    if (!FILESYSTEM.exists(path))
+    {
+        logDebug(String("Config file does not exist: ") + path);
+        return FileSystemResult::FileNotFound;
+    }
+
+    if (!FILESYSTEM.remove(path))
+    {
+        logError(String("Failed to delete config file: ") + path);
+        return FileSystemResult::DeleteError;
+    }
+
+    logDebug(String("Successfully deleted config file: ") + path);
+    return FileSystemResult::Success;
+}
+
+bool FileSystemHandler::exists(const char *path)
+{
+    FilesystemGuard guard;
+    return guard.isMounted() && FILESYSTEM.exists(path);
+}
+
+size_t FileSystemHandler::getFileSize(const char *path)
+{
+    FilesystemGuard guard;
+    if (!guard.isMounted())
+        return 0;
+
+    File file = FILESYSTEM.open(path, "r");
+    if (!file)
+        return 0;
+
+    size_t size = file.size();
+    file.close();
+    return size;
+}
+
+void FileSystemHandler::setLogging(bool enabled)
+{
+    loggingEnabled = enabled;
+}
+
+void FileSystemHandler::logError(const String &message)
+{
+    if (loggingEnabled)
+        Serial.println("[ERROR] " + message);
+}
+
+void FileSystemHandler::logInfo(const String &message)
+{
+    if (loggingEnabled)
+        Serial.println("[INFO] " + message);
+}
+
+void FileSystemHandler::logDebug(const String &message)
+{
+    if (loggingEnabled)
+        Serial.println("[DEBUG] " + message);
 }

@@ -16,38 +16,32 @@
 class MQTTClient
 {
 public:
+    static constexpr size_t MQTT_BUFFER_SIZE = 2048;
+    static constexpr size_t JSON_BUFFER_SIZE = 512;
+    static const char *FIRMWARE_VERSION;
+
     explicit MQTTClient(WiFiClient &wifiClient);
 
-    void setup(const char *mqttBroker, int mqttPort, const char *friendId);
-
+    bool setup(const char *mqttBroker, uint16_t mqttPort, const char *friendId);
     void loop();
-
-    void publish(const char *topic, const JsonDocument &jsonPayload);
-
-    void addTopicAdapter(std::unique_ptr<TopicAdapter> adapter);
-
-    void publishStatusUpdate(const char *statusType, const char *message);
-    void publishErrorMessage(const char *errorMessage);
-
+    bool publish(const char *topic, const JsonDocument &jsonPayload);
+    bool addTopicAdapter(std::unique_ptr<TopicAdapter> adapter);
+    bool publishStatusUpdate(const char *statusType, const char *message);
+    bool publishErrorMessage(const char *errorMessage);
     bool isConnected();
 
 private:
-    void reconnect();
-
-    static constexpr size_t MQTT_BUFFER_SIZE = 2048;
-    static constexpr size_t JSON_BUFFER_SIZE = 512;
-
+    bool reconnect();
     String buildTopic(const TopicAdapter *adapter) const;
-
-    static void staticCallback(char *topic, byte *payload, unsigned int length);
-
+    bool subscribeToAdapterTopics();
     void callback(char *topic, byte *payload, unsigned int length);
-
     bool matches(const String &subscribedTopic, const String &receivedTopic) const;
 
     PubSubClient client;
-    String friendId;
+    char friendId[32];
     std::vector<std::unique_ptr<TopicAdapter>> topicAdapters;
+    unsigned long lastReconnectAttempt = 0;
+    const unsigned long reconnectInterval = 5000;
 };
 
 #endif // MQTTCLIENT_H
