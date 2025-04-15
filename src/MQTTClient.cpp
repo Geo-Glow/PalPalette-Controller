@@ -1,172 +1,222 @@
 #include <ArduinoJson.h>
 #include "MQTTClient.h"
 
-const char *FIRMWARE_VERSION = "1.15";
+const char *MQTTClient::FIRMWARE_VERSION = "1.15";
 
 MQTTClient::MQTTClient(WiFiClient &wifiClient)
     : client(wifiClient)
 {
+    client.setBufferSize(MQTT_BUFFER_SIZE);
+    memset(friendId, 0, sizeof(friendId));
 }
 
-void MQTTClient::setup(const char *mqttBroker, const int mqttPort, const char *friendId)
+bool MQTTClient::setup(const char *mqttBroker, uint16_t mqttPort, const char *friendId)
 {
+    // Validate inputs
+    if (!mqttBroker || !friendId)
+    {
+        Serial.println("[MQTT] Error: Invalid broker or friendId");
+        return false;
+    }
+
+    strncpy(this->friendId, friendId, sizeof(this->friendId) - 1);
+    this->friendId[sizeof(this->friendId) - 1] = '\0';
+
+    // Configure MQTT client
     client.setServer(mqttBroker, mqttPort);
-    this->friendId = friendId;
-    client.setCallback(staticCallback);
-    client.setBufferSize(MQTT_BUFFER_SIZE);
     client.setCallback([this](char *topic, byte *payload, unsigned int length)
                        { this->callback(topic, payload, length); });
-    loop();
-}
 
-void MQTTClient::staticCallback(char *topic, byte *payload, unsigned int length)
-{
+    // Prepare Last Will & Testament (LWT)
+    char willTopic[64];
+    snprintf(willTopic, sizeof(willTopic), "GeoGlow/%s/status", this->friendId);
+
+    JsonDocument willMsg;
+    willMsg["device"] = this->friendId;
+    willMsg["status"] = "unexpected_disconnect";
+    willMsg["version"] = FIRMWARE_VERSION;
+
+    char willPayload[128];
+    serializeJson(willMsg, willPayload);
+
+    // Generate client ID with device identifier
+    char clientId[32];
+    snprintf(clientId, sizeof(clientId), "GeoGlow-%.12s", this->friendId);
+
+    // Attempt connection with LWT
+    bool connected = client.connect(
+        clientId,   // Client ID
+        nullptr,    // Username
+        nullptr,    // Password
+        willTopic,  // LWT Topic
+        1,          // QoS 1
+        true,       // Retain LWT
+        willPayload // LWT Message
+    );
+
+    if (connected)
+    {
+        // Connection successful
+        Serial.printf("[MQTT] Connected to %s as %s\n", mqttBroker, clientId);
+
+        // Subscribe to all registered topics
+        if (!subscribeToAdapterTopics())
+        {
+            Serial.println("[MQTT] Warning: Partial subscription failures");
+        }
+
+        return true;
+    }
+
+    Serial.printf("[MQTT] Connection failed (rc=%d)\n", client.state());
+    return false;
 }
 
 void MQTTClient::loop()
 {
     if (!client.connected())
     {
-        reconnect();
+        unsigned long now = millis();
+        if (now - lastReconnectAttempt >= reconnectInterval)
+        {
+            lastReconnectAttempt = now;
+            reconnect();
+        }
     }
     client.loop();
 }
 
-void MQTTClient::publishStatusUpdate(const char *statusType, const char *message)
-{
-    JsonDocument jsonDoc;
-    jsonDoc["firmwareVersion"] = FIRMWARE_VERSION;
-    jsonDoc["friendId"] = this->friendId;
-    jsonDoc[statusType] = message;
-
-    publish("GeoGlow/status/update", jsonDoc);
-}
-
-void MQTTClient::publishErrorMessage(const char *errorMessage)
-{
-    JsonDocument jsonDoc;
-    jsonDoc["firmwareVersion"] = FIRMWARE_VERSION;
-    jsonDoc["friendId"] = friendId;
-    jsonDoc["error"] = errorMessage;
-
-    publish("GeoGlow/status/error", jsonDoc);
-}
-
-void MQTTClient::reconnect()
-{
-    while (!client.connected())
-    {
-        Serial.print("Attempting MQTT connection...");
-        String mqttClientId = "GeoGlow-" + this->friendId;
-        if (client.connect(mqttClientId.c_str()))
-        {
-            Serial.println("connected: " + mqttClientId);
-            for (const auto &adapter : topicAdapters)
-            {
-                if (client.subscribe(buildTopic(adapter.get()).c_str()))
-                {
-                    Serial.println("Subscribed to topic: " + buildTopic(adapter.get()));
-                }
-                else
-                {
-                    Serial.println("Failed to subscribe to topic: " + buildTopic(adapter.get()));
-                }
-            }
-        }
-        else
-        {
-            Serial.print("Failed to connect, return code: ");
-            Serial.print(client.state());
-            Serial.println("Retrying again in 5 seconds");
-            delay(5000);
-        }
-    }
-}
-
-void MQTTClient::publish(const char *topic, const JsonDocument &jsonPayload)
+bool MQTTClient::reconnect()
 {
     if (client.connected())
+        return true;
+
+    Serial.print("Attempting MQTT connection...");
+    char clientId[32];
+    snprintf(clientId, sizeof(clientId), "GeoGlow-%.12s", friendId);
+
+    if (client.connect(clientId))
     {
-        char buffer[JSON_BUFFER_SIZE];
-        size_t n = serializeJson(jsonPayload, buffer);
-        client.publish(topic, buffer, n);
+        Serial.println("connected");
+        return subscribeToAdapterTopics();
     }
-    else
-    {
-        Serial.println("MQTT client not connected. Unable to publish message.");
-        publishErrorMessage("MQTT client not connected during publish.");
-    }
+
+    Serial.printf("failed, rc=%d\n", client.state());
+    return false;
 }
 
-void MQTTClient::addTopicAdapter(std::unique_ptr<TopicAdapter> adapter)
+bool MQTTClient::subscribeToAdapterTopics()
 {
-    if (client.connected())
+    bool allSuccess = true;
+    for (const auto &adapter : topicAdapters)
     {
-        client.subscribe(buildTopic(adapter.get()).c_str());
+        String topic = buildTopic(adapter.get());
+        if (!client.subscribe(topic.c_str()))
+        {
+            Serial.printf("Failed to subscribe to topic: %s\n", topic.c_str());
+            allSuccess = false;
+        }
     }
+    return allSuccess;
+}
+
+bool MQTTClient::publish(const char *topic, const JsonDocument &jsonPayload)
+{
+    if (!client.connected())
+    {
+        Serial.println("MQTT not connected");
+        return false;
+    }
+
+    char buffer[JSON_BUFFER_SIZE];
+    size_t len = serializeJson(jsonPayload, buffer);
+    return client.publish(topic, buffer, len);
+}
+
+bool MQTTClient::addTopicAdapter(std::unique_ptr<TopicAdapter> adapter)
+{
     topicAdapters.push_back(std::move(adapter));
+    if (client.connected())
+    {
+        String topic = buildTopic(topicAdapters.back().get());
+        return client.subscribe(topic.c_str());
+    }
+    return false;
+}
+
+bool MQTTClient::publishStatusUpdate(const char *statusType, const char *message)
+{
+    JsonDocument doc;
+    doc["firmwareVersion"] = FIRMWARE_VERSION;
+    doc["friendId"] = friendId;
+    doc[statusType] = message;
+    return publish("GeoGlow/status/update", doc);
+}
+
+bool MQTTClient::publishErrorMessage(const char *errorMessage)
+{
+    JsonDocument doc;
+    doc["firmwareVersion"] = FIRMWARE_VERSION;
+    doc["friendId"] = friendId;
+    doc["error"] = errorMessage;
+    return publish("GeoGlow/status/error", doc);
 }
 
 String MQTTClient::buildTopic(const TopicAdapter *adapter) const
 {
-    return "GeoGlow/" + friendId + "/" + adapter->getTopic();
+    return String("GeoGlow/") + friendId + "/" + adapter->getTopic();
 }
 
 bool MQTTClient::matches(const String &subscribedTopic, const String &receivedTopic) const
 {
+    if (subscribedTopic == receivedTopic)
+        return true;
     if (subscribedTopic.endsWith("#"))
     {
-        String baseTopic = subscribedTopic.substring(0, subscribedTopic.length() - 1);
-        return receivedTopic.startsWith(baseTopic);
+        return receivedTopic.startsWith(subscribedTopic.substring(0, subscribedTopic.length() - 1));
     }
-    else if (subscribedTopic.indexOf('+') >= 0)
+
+    int wildcardPos = subscribedTopic.indexOf('+');
+    if (wildcardPos >= 0)
     {
-        int plusPos = subscribedTopic.indexOf('+');
-        String preWildcard = subscribedTopic.substring(0, plusPos);
-        String postWildcard = subscribedTopic.substring(plusPos + 1);
-        if (receivedTopic.startsWith(preWildcard) && receivedTopic.endsWith(postWildcard))
-        {
-            return true;
-        }
+        return receivedTopic.startsWith(subscribedTopic.substring(0, wildcardPos)) &&
+               receivedTopic.endsWith(subscribedTopic.substring(wildcardPos + 1));
     }
-    return subscribedTopic == receivedTopic;
+    return false;
 }
 
 void MQTTClient::callback(char *topic, byte *payload, unsigned int length)
 {
-    char payloadBuffer[length + 1];
-    memcpy(payloadBuffer, payload, length);
-    payloadBuffer[length] = '\0';
-
-    JsonDocument jsonDocument;
-
-    DeserializationError error = deserializeJson(jsonDocument, payloadBuffer);
-    if (error)
+    // Prevent buffer overflow
+    if (length >= JSON_BUFFER_SIZE)
     {
-        Serial.print("JSON Deserialization failed: ");
-        Serial.println(error.c_str());
-        Serial.print("Payload: ");
-        Serial.println(payloadBuffer);
-        publishErrorMessage("JSON Deserialization failed.");
+        publishErrorMessage("Message too large");
         return;
     }
 
-    String receivedTopic = String(topic);
-    Serial.println(receivedTopic);
+    char payloadBuffer[JSON_BUFFER_SIZE];
+    memcpy(payloadBuffer, payload, length);
+    payloadBuffer[length] = '\0';
+
+    JsonDocument doc;
+    if (deserializeJson(doc, payloadBuffer))
+    {
+        publishErrorMessage("JSON deserialization failed");
+        return;
+    }
+
+    String receivedTopic(topic);
     for (const auto &adapter : topicAdapters)
     {
         if (matches(buildTopic(adapter.get()), receivedTopic))
         {
-            adapter->callback(topic, jsonDocument.as<JsonObject>(), length);
+            adapter->callback(topic, doc.as<JsonObject>(), length);
             return;
         }
     }
 
-    Serial.print("Unhandled message [");
-    Serial.print(topic);
-    Serial.print("] ");
-    Serial.println(payloadBuffer);
-    publishErrorMessage("Unhandled MQTT message.");
+    Serial.printf("Unhandled topic: %s\n", topic);
+    publishErrorMessage("Unhandled topic received");
 }
 
 bool MQTTClient::isConnected()

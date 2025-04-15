@@ -212,8 +212,9 @@ bool generateMDNSNanoleafURL()
 void loadConfigFromFile()
 {
     JsonDocument jsonConfig;
-    if (!FileSystemHandler::loadConfigFromFile(CONFIG_FILE, jsonConfig, CONFIG_JSON_SIZE))
+    if (FileSystemHandler::loadConfigFromFile(CONFIG_FILE, jsonConfig, CONFIG_JSON_SIZE) != FileSystemResult::Success)
     {
+        Serial.println("Error loading config file. Using default values.");
         return;
     }
 
@@ -242,9 +243,14 @@ void saveConfigToFile()
     jsonConfig["setupDone"] = initialSetupDone;
     shouldSaveConfig = false;
 
-    if (!FileSystemHandler::saveConfigToFile(CONFIG_FILE, jsonConfig))
+    if (FileSystemHandler::saveConfigToFile(CONFIG_FILE, jsonConfig) != FileSystemResult::Success)
     {
-        Serial.println("Error");
+        Serial.println("Error saving config file.");
+        mqttClient.publishErrorMessage("[FileSystem]: Error saving config file.");
+    }
+    else
+    {
+        Serial.println("Config file saved successfully.");
     }
 }
 
@@ -457,7 +463,6 @@ void blink_led(int blinkDelay)
 
 void initialSetup()
 {
-    FileSystemHandler::begin();
     bool success = false;
 
     Serial.println("Captive Portal wird aufgesetzt.");

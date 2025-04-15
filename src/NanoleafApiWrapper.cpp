@@ -185,33 +185,44 @@ bool NanoleafApiWrapper::identify()
 std::vector<String> NanoleafApiWrapper::getPanelIds()
 {
     JsonDocument jsonResponse;
-
     std::vector<String> panelIds;
     this->triangleIds.clear();
 
-    if (sendRequest("GET", "/panelLayout/layout", nullptr, &jsonResponse, true) && jsonResponse["positionData"].is<const char *>())
+    if (!sendRequest("GET", "/panelLayout/layout", nullptr, &jsonResponse, true))
+    {
+        return panelIds; // Return empty if request failed
+    }
 
-        if (jsonResponse["serialNo"].is<const char *>())
+    // Check if positionData exists and is an array
+    if (!jsonResponse["positionData"].is<JsonArray>())
+    {
+        Serial.println("positionData is not an array or does not exist.");
+        return panelIds;
+    }
+
+    JsonArray positionData = jsonResponse["positionData"].as<JsonArray>();
+    for (JsonObject panel : positionData)
+    {
+        if (!panel["panelId"].is<int>() || !panel["shapeType"].is<int>())
         {
-            const size_t arraySize = jsonResponse["positionData"].size();
+            continue; // Skip invalid entries
+        }
 
-            for (size_t i = 0; i < arraySize; i++)
+        String panelId = panel["panelId"].as<String>();
+        String shapeType = panel["shapeType"].as<String>();
+
+        if (panelId != "0")
+        {
+            if (shapeType == "9")
             {
-                String panelId = jsonResponse["positionData"][i]["panelId"].as<String>();
-                String shapeType = jsonResponse["positionData"][i]["shapeType"].as<String>();
-                if (panelId != "0")
-                {
-                    if (shapeType == "9")
-                    {
-                        triangleIds.push_back(panelId);
-                    }
-                    else
-                    {
-                        panelIds.push_back(panelId);
-                    }
-                }
+                triangleIds.push_back(panelId);
+            }
+            else
+            {
+                panelIds.push_back(panelId);
             }
         }
+    }
 
     return panelIds;
 }
@@ -262,7 +273,6 @@ void NanoleafApiWrapper::setStaticColor(const int rgb[3])
 
 bool NanoleafApiWrapper::setStaticColors(const JsonObject &doc)
 {
-    Serial.println("setStaticColor");
     String animData = "";
     const unsigned int tileCount = doc.size() - 1 + this->triangleIds.size();
     animData += String(tileCount) + " ";
